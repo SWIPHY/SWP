@@ -1,75 +1,55 @@
+// index.js
+const { Client, GatewayIntentBits } = require('discord.js');
+const express = require('express');
+const bodyParser = require('body-parser');
 
-require('dotenv').config();
+const app = express();
+app.use(bodyParser.json());
 
-const http = require('http');
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+// Variables d'environnement (à configurer sur Render)
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const CHANNEL_ID = process.env.CHANNEL_ID;       // salon Discord cible
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || ""; // secret optionnel
 
-const TOKEN = process.env.DISCORD_TOKEN;
-const APPLICATION_ID = process.env.APPLICATION_ID; // Discord Application (client) ID
-const GUILD_ID = process.env.GUILD_ID; // Optional: dev/test guild for fast command registration
-
-if (!TOKEN) {
-  console.error('❌ Missing DISCORD_TOKEN env var.');
-  process.exit(1);
-}
-if (!APPLICATION_ID) {
-  console.error('❌ Missing APPLICATION_ID env var.');
-  process.exit(1);
-}
-
-// Tiny HTTP server so Render Web Service stays healthy
-const PORT = process.env.PORT || 10000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running.\n');
-}).listen(PORT, () => console.log(`HTTP keepalive on port ${PORT}`));
-
-// Create client with basic intents (no Message Content needed for slash commands)
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-
-// Define commands (guild or global)
-const commands = [
-  new SlashCommandBuilder().setName('ping').setDescription('Répond Pong!'),
-].map(cmd => cmd.toJSON());
-
-// Register slash commands
-async function registerCommands() {
-  const rest = new REST({ version: '10' }).setToken(TOKEN);
-  try {
-    if (GUILD_ID) {
-      await rest.put(
-        Routes.applicationGuildCommands(APPLICATION_ID, GUILD_ID),
-        { body: commands }
-      );
-      console.log('✅ Guild commands registered.');
-    } else {
-      await rest.put(
-        Routes.applicationCommands(APPLICATION_ID),
-        { body: commands }
-      );
-      console.log('✅ Global commands registered (peuvent prendre jusqu’à 1h à apparaître).');
-    }
-  } catch (err) {
-    console.error('Failed to register commands:', err);
-  }
-}
+// Discord Client
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
+});
 
 client.once('ready', () => {
-  console.log(`🤖 Connecté en tant que ${client.user.tag}`);
+  console.log(`Bot connecté en tant que ${client.user.tag}`);
 });
 
-client.on('interactionCreate', async (interaction) => {
+// Endpoint HTTP pour recevoir les messages du raccourci iPhone
+app.post('/send', async (req, res) => {
   try {
-    if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName === 'ping') {
-      await interaction.reply('🏓 Pong!');
+    // Vérification du secret (optionnelle)
+    if (WEBHOOK_SECRET) {
+      const auth = req.headers['authorization'] || '';
+      if (!auth.startsWith('Bearer ') || auth.split(' ')[1] !== WEBHOOK_SECRET) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
     }
+
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: "Missing 'content'" });
+
+    const channel = await client.channels.fetch(CHANNEL_ID);
+    if (!channel) return res.status(404).json({ error: "Channel not found" });
+
+    await channel.send(content);
+    res.json({ status: 'ok', content });
   } catch (err) {
-    console.error('Interaction error:', err);
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-(async () => {
-  await registerCommands();
-  await client.login(TOKEN);
-})();
+// Lancer le serveur HTTP
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Serveur HTTP lancé sur le port ${PORT}`);
+});
+
+// Lancer le bot
+client.login(DISCORD_TOKEN);
